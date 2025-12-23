@@ -44,6 +44,14 @@ except ImportError:
     HAS_DOCX = False
     logging.warning("Word library not installed. Install: pip install python-docx")
 
+# HTML extraction
+try:
+    from bs4 import BeautifulSoup
+    HAS_HTML = True
+except ImportError:
+    HAS_HTML = False
+    logging.warning("HTML library not installed. Install: pip install beautifulsoup4")
+
 logger = logging.getLogger(__name__)
 
 
@@ -661,6 +669,104 @@ class TextExtractor:
             }
 
     # ========================================================================
+    # HTML Extraction
+    # ========================================================================
+
+    def extract_html_text(self, file_path: Path) -> Dict[str, any]:
+        """
+        Extract text from HTML files using BeautifulSoup.
+        Removes scripts, styles, and extracts clean text content.
+        Returns: {
+            'text': str,
+            'method': str,
+            'sections': List[Dict],
+            'title': str (if found)
+        }
+        """
+        if not HAS_HTML:
+            return {
+                'text': '',
+                'error': 'HTML library not installed. Install: pip install beautifulsoup4'
+            }
+
+        try:
+            # Read file with encoding detection
+            encodings_to_try = ['utf-8', 'cp949', 'euc-kr', 'latin-1']
+            content = None
+
+            for encoding in encodings_to_try:
+                try:
+                    with open(file_path, 'r', encoding=encoding) as f:
+                        content = f.read()
+                    break
+                except UnicodeDecodeError:
+                    continue
+
+            if content is None:
+                # Fallback: read as binary and let BeautifulSoup handle it
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+
+            # Parse HTML
+            soup = BeautifulSoup(content, 'html.parser')
+
+            # Extract title if present
+            title = ''
+            title_tag = soup.find('title')
+            if title_tag:
+                title = title_tag.get_text(strip=True)
+
+            # Remove script and style elements
+            for element in soup(['script', 'style', 'head', 'meta', 'link', 'noscript']):
+                element.decompose()
+
+            # Extract text from body or entire document
+            body = soup.find('body')
+            if body:
+                text_content = body.get_text(separator='\n', strip=True)
+            else:
+                text_content = soup.get_text(separator='\n', strip=True)
+
+            # Clean up multiple newlines and whitespace
+            import re
+            text_content = re.sub(r'\n\s*\n', '\n\n', text_content)
+            text_content = text_content.strip()
+
+            if not text_content:
+                return {
+                    'text': '',
+                    'error': 'No text content found in HTML file',
+                    'sections': []
+                }
+
+            sections = [{
+                'section_type': 'document',
+                'section_title': title if title else 'HTML Document',
+                'text': text_content,
+                'section_order': 1,
+                'word_count': len(text_content.split()),
+                'char_count': len(text_content)
+            }]
+
+            logger.info(f"  [OK] Extracted {len(text_content)} chars from HTML")
+
+            return {
+                'text': text_content,
+                'method': 'beautifulsoup',
+                'sections': sections,
+                'title': title,
+                'word_count': len(text_content.split()),
+                'char_count': len(text_content)
+            }
+
+        except Exception as e:
+            logger.error(f"HTML extraction failed for {file_path.name}: {e}")
+            return {
+                'text': '',
+                'error': str(e)
+            }
+
+    # ========================================================================
     # ZIP Extraction
     # ========================================================================
 
@@ -715,7 +821,7 @@ class TextExtractor:
                     }
 
             # Supported extensions for processing
-            supported_extensions = {'.pdf', '.hwp', '.hwpx', '.xlsx', '.xls', '.xlsm', '.docx'}
+            supported_extensions = {'.pdf', '.hwp', '.hwpx', '.xlsx', '.xls', '.xlsm', '.docx', '.html', '.htm'}
 
             # Find all extracted files
             all_files = []
@@ -823,6 +929,8 @@ class TextExtractor:
             return self.extract_excel_text(file_path)
         elif file_ext == '.docx':
             return self.extract_word_text(file_path)
+        elif file_ext in ['.html', '.htm']:
+            return self.extract_html_text(file_path)
         else:
             return {
                 'text': '',
@@ -870,6 +978,9 @@ class TextExtractor:
 
         elif file_ext == '.zip':
             return self.extract_zip_text(file_path)
+
+        elif file_ext in ['.html', '.htm']:
+            return self.extract_html_text(file_path)
 
         else:
             return {
